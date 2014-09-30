@@ -592,6 +592,7 @@ static void close_func (LexState *ls) {
 */
 static int block_follow (LexState *ls, int withuntil) {
   switch (ls->t.token) {
+    case TK_EXCEPT: case TK_FINALLY:
     case TK_ELSE: case TK_ELSEIF:
     case TK_END: case TK_EOS:
       return 1;
@@ -1525,6 +1526,70 @@ static void retstat (LexState *ls) {
   testnext(ls, ';');  /* skip optional semicolon */
 }
 
+static void dangerous_body(LexState *ls, expdesc *e, int line)
+{
+  FuncState new_fs;
+  BlockCnt bl;
+  new_fs.f = addprototype(ls);
+  new_fs.f->linedefined = line;
+  open_func(ls, &new_fs, &bl);
+  statlist(ls);
+  new_fs.f->lastlinedefined = ls->linenumber;
+  if (ls->t.token != TK_EXCEPT)
+    check(ls, TK_FINALLY);
+  codeclosure(ls, e);
+  close_func(ls);
+}
+
+
+static void test_except_block(LexState *ls, int *escapelist)
+{
+  BlockCnt bl;
+  FuncState *fs = ls->fs;
+  expdesc v;
+  int jf; /* instruction to skip 'except' code (if execute is !OK) */
+  expr(ls, &v); /* read condition */
+  luaK_goiftrue(ls->fs, &v); /* skip over block if execute is OK */
+  enterblock(fs, &bl, 0);    /* function except() return !bool => True is False, False is True */
+  jf = v.f;
+  statlist(ls); /* 'except' part */
+  leaveblock(fs);
+  luaK_concat(fs, escapelist, luaK_jump(fs));
+  luaK_patchtohere(fs, jf);
+}
+
+
+static void trystat(LexState *ls, int line)
+{
+  /* try                                         */
+  /*   dangerous_block                           */
+  /* except()          */  /* or */ /* finally() */
+  /*   block           */           /*   block   */
+  /* end               */           /* end       */
+  expdesc v, b;
+  check(ls, TK_TRY); /* Check 'try' */
+  ls->t.token = TK_NAME;
+  funcname(ls, &v);
+  dangerous_body(ls, &b, line);
+  luaK_storevar(ls->fs, &v, &b);
+  luaK_fixline(ls->fs, line);
+
+  if (ls->t.token == TK_EXCEPT){ /* TK_EXCEPT is Token and call function */
+    ls->t.token = TK_NAME;
+    FuncState *fs = ls->fs;
+    int escapelist = NO_JUMP;  /* exit list for finished parts */
+    test_except_block(ls, &escapelist);  /* EXCEPT block */
+    check_match(ls, TK_END, TK_EXCEPT, line);
+    luaK_patchtohere(fs, escapelist);
+  } else { /* if not except */
+    check(ls, TK_FINALLY); /* Check 'finally' */ /* function finally call block 'try' */
+    ls->t.token = TK_NAME; /* finally is Token finally and function finally */
+    statlist(ls); /* finally block */
+    check_match(ls, TK_END, TK_FINALLY, line);
+  }
+}
+
+
 
 static void statement (LexState *ls) {
   int line = ls->linenumber;  /* may be needed for error messages */
@@ -1581,6 +1646,10 @@ static void statement (LexState *ls) {
     case TK_BREAK:   /* stat -> breakstat */
     case TK_GOTO: {  /* stat -> 'goto' NAME */
       gotostat(ls, luaK_jump(ls->fs));
+      break;
+    }
+    case TK_TRY: {
+      trystat(ls, line);
       break;
     }
     default: {  /* stat -> func | assignment */

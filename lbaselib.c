@@ -414,6 +414,19 @@ static int luaB_tostring (lua_State *L) {
 }
 
 
+static int luaB_except (lua_State *L) {
+  lua_getglobal(L, "try");
+  lua_pushboolean(L, !(lua_pcall(L, 0, 0, 0) == LUA_OK)); /* !bool because use goiftrue */
+  return 1;
+}
+
+static int luaB_finally(lua_State *L)
+{
+    lua_getglobal(L, "try");
+    lua_pcall(L, 0, 0, 0);
+    return 1;
+}
+
 static const luaL_Reg base_funcs[] = {
   {"assert", luaB_assert},
   {"collectgarbage", luaB_collectgarbage},
@@ -426,6 +439,8 @@ static const luaL_Reg base_funcs[] = {
 #if defined(LUA_COMPAT_LOADSTRING)
   {"loadstring", luaB_load},
 #endif
+  {"except", luaB_except}, // only for call try-except contruction
+  {"finally", luaB_finally}, // only for call try-finally contruction
   {"next", luaB_next},
   {"pairs", luaB_pairs},
   {"pcall", luaB_pcall},
